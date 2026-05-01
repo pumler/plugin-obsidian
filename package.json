@@ -1,0 +1,43 @@
+{
+  "name": "pumler-obsidian-plugin",
+  "version": "0.1.0",
+  "description": "Render PlantUML, Structurizr DSL, and Mermaid diagrams from pumler code blocks using the Pumler API.",
+  "private": true,
+  "type": "module",
+  "main": "main.js",
+  "files": [
+    "main.js",
+    "manifest.json",
+    "styles.css",
+    "versions.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "dev": "node esbuild.config.mjs",
+    "test": "vitest run --environment jsdom"
+  },
+  "keywords": [
+    "obsidian",
+    "pumler",
+    "plantuml",
+    "structurizr",
+    "mermaid"
+  ],
+  "author": "Pumler",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "builtin-modules": "^5.0.0",
+    "esbuild": "^0.27.1",
+    "jsdom": "^27.4.0",
+    "obsidian": "^1.8.7",
+    "tslib": "^2.8.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.0"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  }
+}
