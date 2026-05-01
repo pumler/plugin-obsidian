@@ -1,0 +1,75 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - '*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build release artifacts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate release metadata
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs'
+
+          const tag = process.env.GITHUB_REF_NAME
+          const manifest = JSON.parse(fs.readFileSync('manifest.json', 'utf8'))
+          const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'))
+          const versions = JSON.parse(fs.readFileSync('versions.json', 'utf8'))
+
+          if (tag !== manifest.version) {
+            throw new Error(`Release tag "${tag}" must match manifest.version "${manifest.version}"`)
+          }
+
+          if (packageJson.version !== manifest.version) {
+            throw new Error(`package.json version "${packageJson.version}" must match manifest.version "${manifest.version}"`)
+          }
+
+          if (versions[manifest.version] !== manifest.minAppVersion) {
+            throw new Error(`versions.json must map "${manifest.version}" to minAppVersion "${manifest.minAppVersion}"`)
+          }
+          NODE
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build plugin
+        run: npm run build
+
+      - name: Verify release files
+        run: |
+          test -s main.js
+          test -s manifest.json
+          test -s styles.css
+          test -s versions.json
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            main.js \
+            manifest.json \
+            styles.css \
+            versions.json \
+            --title "$GITHUB_REF_NAME" \
+            --notes "Release $GITHUB_REF_NAME"
