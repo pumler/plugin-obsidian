@@ -1,9 +1,9 @@
 {
   "id": "pumler",
-  "name": "Pumler",
+  "name": "Pumler Diagrams",
   "version": "1.0.0",
   "minAppVersion": "1.0.0",
-  "description": "Render PlantUML, Structurizr DSL, and Mermaid diagrams from pumler code blocks using the Pumler API.",
+  "description": "Render PlantUML, Structurizr and Mermaid diagrams from code blocks.",
   "author": "Pumler",
   "authorUrl": "https://pumler.com",
   "isDesktopOnly": false
