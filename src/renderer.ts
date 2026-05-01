@@ -1,7 +1,6 @@
 import { parsePumlerBlock, PumlerValidationError } from './parser'
 import { resolveTheme } from './theme'
 import { createRenderDiagramCacheSeed, PumlerApiClient, PumlerRenderError, type RenderDiagramOptions } from './client'
-import { createLogDigest, formatLogError, NOOP_PUMLER_LOGGER, type PumlerLogger } from './logger'
 import { cloneSanitizedSvgWithIdScope, sanitizeSvg } from './svg'
 import type { PumlerSvgCache } from './cache'
 
@@ -18,6 +17,7 @@ interface RenderOptions {
   debounceMs?: number
   requireConnected?: boolean
   signal?: AbortSignal
+  registerModalCleanup?: (cleanup: () => void) => void
 }
 
 interface PendingRender {
@@ -40,18 +40,11 @@ export class PumlerBlockRenderer {
 
   constructor(
     private readonly client: PumlerApiClient,
-    private readonly cache?: PumlerSvgCache,
-    private readonly logger: PumlerLogger = NOOP_PUMLER_LOGGER
+    private readonly cache?: PumlerSvgCache
   ) {}
 
   async render(source: string, element: HTMLElement, options: RenderOptions = {}): Promise<void> {
-    const sourceDigest = createLogDigest(source)
     if (options.signal?.aborted) {
-      this.logger.debug('renderer.render.skip_pre_aborted', {
-        debounceKey: options.debounceKey,
-        sourceLength: source.length,
-        sourceDigest
-      })
       return
     }
 
@@ -61,14 +54,6 @@ export class PumlerBlockRenderer {
     const debounceKey = options.debounceKey || createElementDebounceKey(element)
     const token = ++this.nextRenderToken
     this.activeRenderTokens.set(debounceKey, token)
-    this.logger.info('renderer.render.start', {
-      debounceKey,
-      token,
-      sourceLength: source.length,
-      sourceDigest,
-      elementConnected: element.isConnected,
-      signalAborted: options.signal?.aborted ?? false
-    })
 
     const isCurrentRender = () => this.activeRenderTokens.get(debounceKey) === token
     let parsed: ReturnType<typeof parsePumlerBlock>
@@ -81,45 +66,17 @@ export class PumlerBlockRenderer {
         theme: resolveTheme(parsed.metadata.theme),
         source: parsed.source
       }
-      this.logger.info('renderer.render.parsed', {
-        debounceKey,
-        token,
-        provider: renderOptions.provider,
-        type: renderOptions.type,
-        configuredTheme: parsed.metadata.theme,
-        resolvedTheme: renderOptions.theme,
-        diagramSourceLength: parsed.source.length,
-        diagramSourceDigest: createLogDigest(parsed.source)
-      })
 
       const cachedSvg = await this.cache?.get(renderOptions)
       if (cachedSvg) {
         if (options.signal?.aborted || !isCurrentRender()) {
-          this.logger.debug('renderer.render.cached_skip_stale', {
-            debounceKey,
-            token,
-            signalAborted: options.signal?.aborted ?? false,
-            isCurrentRender: isCurrentRender()
-          })
           return
         }
 
-        this.logger.info('renderer.render.cache_hit_replace', {
-          debounceKey,
-          token,
-          svgLength: cachedSvg.length
-        })
-        this.replaceWithDiagram(element, cachedSvg, parsed.metadata, renderOptions, debounceKey, token)
+        this.replaceWithDiagram(element, cachedSvg, parsed.metadata, renderOptions, options.registerModalCleanup)
         return
       }
     } catch (error) {
-      this.logger.warn('renderer.render.parse_or_cache_error', {
-        debounceKey,
-        token,
-        signalAborted: options.signal?.aborted ?? false,
-        isCurrentRender: isCurrentRender(),
-        ...formatLogError(error)
-      })
       if (!options.signal?.aborted && isCurrentRender()) {
         element.replaceChildren(createErrorElement(error))
       }
@@ -128,11 +85,6 @@ export class PumlerBlockRenderer {
 
     const pendingRender = this.pendingRenders.get(debounceKey)
     if (pendingRender) {
-      this.logger.debug('renderer.debounce.supersede_previous', {
-        debounceKey,
-        token,
-        hadTimer: pendingRender.timer !== null
-      })
       if (pendingRender.timer !== null) {
         clearTimeout(pendingRender.timer)
       }
@@ -150,11 +102,6 @@ export class PumlerBlockRenderer {
         }
         settled = true
         options.signal?.removeEventListener('abort', settle)
-        this.logger.debug('renderer.render.promise_settle', {
-          debounceKey,
-          token,
-          signalAborted: options.signal?.aborted ?? false
-        })
         resolve()
       }
       const cancelScheduledRender = () => {
@@ -164,10 +111,6 @@ export class PumlerBlockRenderer {
         if (pendingRender && this.pendingRenders.get(debounceKey) === pendingRender) {
           this.pendingRenders.delete(debounceKey)
         }
-        this.logger.debug('renderer.debounce.cancel_scheduled', {
-          debounceKey,
-          token
-        })
         settle()
       }
 
@@ -175,12 +118,16 @@ export class PumlerBlockRenderer {
         if (pendingRender && this.pendingRenders.get(debounceKey) === pendingRender) {
           this.pendingRenders.delete(debounceKey)
         }
-        this.logger.info('renderer.debounce.execute', {
+        void this.renderRemote(
+          renderOptions,
+          parsed.metadata,
+          element,
           debounceKey,
           token,
-          signalAborted: options.signal?.aborted ?? false
-        })
-        void this.renderRemote(renderOptions, parsed.metadata, element, debounceKey, token, options.requireConnected, options.signal).finally(settle)
+          options.requireConnected,
+          options.signal,
+          options.registerModalCleanup
+        ).finally(settle)
       }
 
       if (debounceMs <= 0) {
@@ -189,11 +136,6 @@ export class PumlerBlockRenderer {
       }
 
       timer = setTimeout(execute, debounceMs)
-      this.logger.info('renderer.debounce.schedule', {
-        debounceKey,
-        token,
-        debounceMs
-      })
       pendingRender = {
         timer,
         supersede: cancelScheduledRender
@@ -201,10 +143,6 @@ export class PumlerBlockRenderer {
       this.pendingRenders.set(debounceKey, pendingRender)
       options.signal?.addEventListener('abort', settle, { once: true })
       if (options.signal?.aborted) {
-        this.logger.debug('renderer.debounce.post_listener_aborted', {
-          debounceKey,
-          token
-        })
         settle()
       }
     })
@@ -217,54 +155,24 @@ export class PumlerBlockRenderer {
     debounceKey: string,
     token: number,
     requireConnected: boolean | undefined,
-    signal: AbortSignal | undefined
+    signal: AbortSignal | undefined,
+    registerModalCleanup: ((cleanup: () => void) => void) | undefined
   ): Promise<void> {
     if (requireConnected && !element.isConnected) {
-      this.logger.info('renderer.remote.skip_detached', {
-        debounceKey,
-        token
-      })
       return
     }
 
     const isCurrentRender = () => this.activeRenderTokens.get(debounceKey) === token
 
     try {
-      this.logger.info('renderer.remote.await', {
-        debounceKey,
-        token,
-        provider: options.provider,
-        type: options.type,
-        theme: options.theme,
-        signalAborted: signal?.aborted ?? false
-      })
       const svg = await this.getOrStartRemoteRender(options)
 
       if (signal?.aborted || !isCurrentRender()) {
-        this.logger.info('renderer.remote.skip_replace_stale', {
-          debounceKey,
-          token,
-          signalAborted: signal?.aborted ?? false,
-          isCurrentRender: isCurrentRender(),
-          svgLength: svg.length
-        })
         return
       }
 
-      this.logger.info('renderer.remote.replace', {
-        debounceKey,
-        token,
-        svgLength: svg.length
-      })
-      this.replaceWithDiagram(element, svg, metadata, options, debounceKey, token)
+      this.replaceWithDiagram(element, svg, metadata, options, registerModalCleanup)
     } catch (error) {
-      this.logger.warn('renderer.remote.error', {
-        debounceKey,
-        token,
-        signalAborted: signal?.aborted ?? false,
-        isCurrentRender: isCurrentRender(),
-        ...formatLogError(error)
-      })
       if (signal?.aborted || !isCurrentRender()) {
         return
       }
@@ -274,28 +182,18 @@ export class PumlerBlockRenderer {
 
   private getOrStartRemoteRender(options: RenderDiagramOptions): Promise<string> {
     const key = createRenderDiagramCacheSeed(options)
-    const renderDigest = createLogDigest(key)
     const existingRender = this.inFlightRemoteRenders.get(key)
     if (existingRender) {
-      this.logger.info('renderer.remote.reuse_inflight', createRenderLogData(options, renderDigest))
       return existingRender
     }
 
-    const startedAt = Date.now()
-    this.logger.info('renderer.remote.start_inflight', createRenderLogData(options, renderDigest))
     const render = this.client.renderDiagram(options)
       .then(async svg => {
         await this.cache?.set(options, svg)
-        this.logger.info('renderer.remote.done_inflight', {
-          ...createRenderLogData(options, renderDigest),
-          durationMs: Date.now() - startedAt,
-          svgLength: svg.length
-        })
         return svg
       })
       .finally(() => {
         this.inFlightRemoteRenders.delete(key)
-        this.logger.debug('renderer.remote.clear_inflight', createRenderLogData(options, renderDigest))
       })
 
     this.inFlightRemoteRenders.set(key, render)
@@ -307,70 +205,28 @@ export class PumlerBlockRenderer {
     svg: string,
     metadata: { provider: string, type: string, title?: string },
     options: RenderDiagramOptions,
-    debounceKey: string,
-    token: number
+    registerModalCleanup: ((cleanup: () => void) => void) | undefined
   ): void {
     const renderSeed = createRenderDiagramCacheSeed(options)
-    const renderDigest = createLogDigest(renderSeed)
-    const startedAt = Date.now()
-    this.logger.debug('renderer.dom.sanitize_start', {
-      debounceKey,
-      token,
-      renderDigest,
-      provider: metadata.provider,
-      type: metadata.type,
-      svgLength: svg.length
-    })
 
-    const template = this.getOrCreateSanitizedSvgTemplate(renderSeed, renderDigest, svg, metadata, debounceKey, token)
-    const cloneStartedAt = Date.now()
+    const template = this.getOrCreateSanitizedSvgTemplate(renderSeed, svg)
     const svgElement = cloneSanitizedSvgWithIdScope(template, this.createSvgIdScope())
     svgElement.classList.add('pumler-render__svg')
-    this.logger.debug('renderer.dom.clone_done', {
-      debounceKey,
-      token,
-      renderDigest,
-      durationMs: Date.now() - cloneStartedAt
-    })
 
-    const replaceStartedAt = Date.now()
-    element.replaceChildren(createDiagramFigure(svgElement, metadata))
-    this.logger.info('renderer.dom.replace_done', {
-      debounceKey,
-      token,
-      renderDigest,
-      provider: metadata.provider,
-      type: metadata.type,
-      title: metadata.title,
-      replaceDurationMs: Date.now() - replaceStartedAt,
-      totalDurationMs: Date.now() - startedAt
-    })
+    element.replaceChildren(createDiagramFigure(svgElement, metadata, registerModalCleanup))
   }
 
   private getOrCreateSanitizedSvgTemplate(
     renderSeed: string,
-    renderDigest: string,
-    svg: string,
-    metadata: { provider: string, type: string },
-    debounceKey: string,
-    token: number
+    svg: string
   ): SVGElement {
     const cachedTemplate = this.sanitizedSvgTemplates.get(renderSeed)
     if (cachedTemplate) {
       this.sanitizedSvgTemplates.delete(renderSeed)
       this.sanitizedSvgTemplates.set(renderSeed, cachedTemplate)
-      this.logger.debug('renderer.dom.template_cache_hit', {
-        debounceKey,
-        token,
-        renderDigest,
-        provider: metadata.provider,
-        type: metadata.type,
-        templateCacheSize: this.sanitizedSvgTemplates.size
-      })
       return cachedTemplate
     }
 
-    const startedAt = Date.now()
     const template = sanitizeSvg(svg)
     this.sanitizedSvgTemplates.set(renderSeed, template)
     while (this.sanitizedSvgTemplates.size > SANITIZED_SVG_TEMPLATE_CACHE_LIMIT) {
@@ -380,33 +236,12 @@ export class PumlerBlockRenderer {
       }
       this.sanitizedSvgTemplates.delete(oldestKey)
     }
-    this.logger.info('renderer.dom.template_cache_miss', {
-      debounceKey,
-      token,
-      renderDigest,
-      provider: metadata.provider,
-      type: metadata.type,
-      sanitizeDurationMs: Date.now() - startedAt,
-      svgLength: svg.length,
-      templateCacheSize: this.sanitizedSvgTemplates.size
-    })
     return template
   }
 
   private createSvgIdScope(): string {
     this.nextSvgIdScope += 1
     return `pumler-svg-${this.nextSvgIdScope}`
-  }
-}
-
-function createRenderLogData(options: RenderDiagramOptions, renderDigest: string): Record<string, unknown> {
-  return {
-    provider: options.provider,
-    type: options.type,
-    theme: options.theme,
-    sourceLength: options.source.length,
-    sourceDigest: createLogDigest(options.source),
-    renderDigest
   }
 }
 
@@ -425,7 +260,11 @@ function createElementDebounceKey(element: HTMLElement): string {
   return key
 }
 
-function createDiagramFigure(svgElement: SVGElement, metadata: { provider: string, type: string, title?: string }): HTMLElement {
+function createDiagramFigure(
+  svgElement: SVGElement,
+  metadata: { provider: string, type: string, title?: string },
+  registerModalCleanup: ((cleanup: () => void) => void) | undefined
+): HTMLElement {
   const figure = document.createElement('div')
   figure.className = 'pumler-render__figure'
 
@@ -434,7 +273,7 @@ function createDiagramFigure(svgElement: SVGElement, metadata: { provider: strin
   viewport.appendChild(svgElement)
 
   let isExpanded = true
-  const summary = createCollapsedSummary(metadata, svgElement, () => {
+  const summary = createCollapsedSummary(metadata, svgElement, registerModalCleanup, () => {
     setExpanded(!isExpanded)
   })
   const setExpanded = (expanded: boolean) => {
@@ -457,6 +296,7 @@ function createDiagramFigure(svgElement: SVGElement, metadata: { provider: strin
 function createCollapsedSummary(
   metadata: { provider: string, type: string, title?: string },
   svgElement: SVGElement,
+  registerModalCleanup: ((cleanup: () => void) => void) | undefined,
   onToggle: () => void
 ): { button: HTMLButtonElement, stateIcon: HTMLSpanElement } {
   const button = document.createElement('button')
@@ -477,13 +317,13 @@ function createCollapsedSummary(
   openButton.appendChild(createMagnifierIcon())
   openButton.addEventListener('click', event => {
     event.stopPropagation()
-    openLargePreview(svgElement)
+    openRegisteredLargePreview(svgElement, registerModalCleanup)
   })
   openButton.addEventListener('keydown', event => {
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault()
       event.stopPropagation()
-      openLargePreview(svgElement)
+      openRegisteredLargePreview(svgElement, registerModalCleanup)
     }
   })
 
@@ -509,6 +349,14 @@ function createCollapsedSummary(
   button.appendChild(expandIcon)
 
   return { button, stateIcon: expandIcon }
+}
+
+function openRegisteredLargePreview(
+  svgElement: SVGElement,
+  registerModalCleanup: ((cleanup: () => void) => void) | undefined
+): void {
+  const cleanup = openLargePreview(svgElement)
+  registerModalCleanup?.(cleanup)
 }
 
 function createMagnifierIcon(): SVGElement {
@@ -611,7 +459,7 @@ function createBaseIcon(className: string): SVGElement {
   return icon
 }
 
-function openLargePreview(svgElement: SVGElement): void {
+function openLargePreview(svgElement: SVGElement): () => void {
   const overlay = document.createElement('div')
   overlay.className = 'pumler-render__modal'
   overlay.setAttribute('role', 'dialog')
@@ -747,7 +595,12 @@ function openLargePreview(svgElement: SVGElement): void {
   })
   applyZoom()
 
+  let closed = false
   const close = () => {
+    if (closed) {
+      return
+    }
+    closed = true
     document.removeEventListener('keydown', handleKeydown)
     overlay.remove()
   }
@@ -771,6 +624,8 @@ function openLargePreview(svgElement: SVGElement): void {
   overlay.appendChild(preview)
   document.body.appendChild(overlay)
   closeButton.focus()
+
+  return close
 }
 
 function getPointerDistance(pointers: Map<number, { x: number, y: number }>): number {

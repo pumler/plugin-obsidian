@@ -6,6 +6,7 @@ import type { PumlerSvgCache } from './cache'
 describe('PumlerBlockRenderer', () => {
   afterEach(() => {
     vi.useRealTimers()
+    document.querySelectorAll('.pumler-render__modal').forEach(element => element.remove())
   })
 
   test('shows a loading state before rendering resolves', async () => {
@@ -99,6 +100,24 @@ describe('PumlerBlockRenderer', () => {
     expect(document.querySelector('.pumler-render__modal-svg')?.getAttribute('style')).toBe('width: 100%;')
 
     document.querySelector<HTMLButtonElement>('.pumler-render__modal-close')?.click()
+    expect(document.querySelector('.pumler-render__modal')).toBeNull()
+  })
+
+  test('registers modal cleanup for render child unload', async () => {
+    const renderer = new PumlerBlockRenderer(createClient(async () => '<svg viewBox="0 0 10 10"><circle /></svg>'))
+    const element = document.createElement('div')
+    const cleanups: Array<() => void> = []
+
+    await renderer.render(validBlock(), element, {
+      debounceMs: 0,
+      registerModalCleanup: cleanup => cleanups.push(cleanup)
+    })
+    element.querySelector<HTMLButtonElement>('.pumler-render__open-button')?.click()
+
+    expect(document.querySelector('.pumler-render__modal')).not.toBeNull()
+    expect(cleanups).toHaveLength(1)
+
+    cleanups.forEach(cleanup => cleanup())
     expect(document.querySelector('.pumler-render__modal')).toBeNull()
   })
 

@@ -1,4 +1,5 @@
 const SIZING_STYLE_PROPERTIES = ['width', 'height', 'max-width', 'max-height', 'min-width', 'min-height']
+const CSS_SELECTOR_SEPARATOR_PATTERN = /,(?![^\[]*\])/
 
 const ALLOWED_ELEMENTS = new Set([
   'svg',
@@ -16,6 +17,11 @@ const ALLOWED_ELEMENTS = new Set([
   'text',
   'tspan',
   'textpath',
+  'foreignobject',
+  'div',
+  'span',
+  'p',
+  'br',
   'use',
   'marker',
   'clippath',
@@ -63,7 +69,8 @@ const GLOBAL_ATTRIBUTES = new Set([
   'marker-end',
   'color',
   'display',
-  'visibility'
+  'visibility',
+  'white-space'
 ])
 const ELEMENT_ATTRIBUTES = new Map([
   ['svg', ['viewbox', 'width', 'height', 'x', 'y', 'preserveaspectratio', 'version', 'xmlns']],
@@ -77,6 +84,7 @@ const ELEMENT_ATTRIBUTES = new Map([
   ['text', ['x', 'y', 'dx', 'dy', 'rotate', 'textlength', 'lengthadjust', 'text-anchor', 'dominant-baseline', 'alignment-baseline', 'font-family', 'font-size', 'font-weight', 'font-style', 'font-stretch', 'letter-spacing', 'word-spacing']],
   ['tspan', ['x', 'y', 'dx', 'dy', 'rotate', 'textlength', 'lengthadjust', 'text-anchor', 'dominant-baseline', 'alignment-baseline', 'font-family', 'font-size', 'font-weight', 'font-style', 'font-stretch', 'letter-spacing', 'word-spacing']],
   ['textpath', ['href', 'xlink:href', 'startoffset', 'method', 'spacing']],
+  ['foreignobject', ['x', 'y', 'width', 'height']],
   ['use', ['href', 'xlink:href', 'x', 'y', 'width', 'height']],
   ['marker', ['refx', 'refy', 'markerwidth', 'markerheight', 'markerunits', 'orient', 'viewbox', 'preserveaspectratio']],
   ['clippath', ['clippathunits']],
@@ -100,6 +108,10 @@ const ELEMENT_ATTRIBUTES = new Map([
 const URL_ATTRIBUTES = new Set(['href', 'xlink:href'])
 const CSS_PROPERTIES = new Set([
   'alignment-baseline',
+  'background',
+  'background-color',
+  'border',
+  'border-radius',
   'clip-path',
   'clip-rule',
   'color',
@@ -116,11 +128,21 @@ const CSS_PROPERTIES = new Set([
   'font-style',
   'font-weight',
   'letter-spacing',
+  'line-height',
+  'margin',
+  'margin-bottom',
+  'margin-left',
+  'margin-right',
+  'margin-top',
   'marker-end',
   'marker-mid',
   'marker-start',
   'mask',
   'opacity',
+  'overflow',
+  'padding',
+  'pointer-events',
+  'position',
   'stop-color',
   'stop-opacity',
   'stroke',
@@ -132,8 +154,12 @@ const CSS_PROPERTIES = new Set([
   'stroke-opacity',
   'stroke-width',
   'text-anchor',
+  'text-align',
+  'vertical-align',
   'visibility',
+  'white-space',
   'word-spacing',
+  'z-index',
   ...SIZING_STYLE_PROPERTIES
 ])
 
@@ -152,10 +178,6 @@ export function sanitizeSvg(svg: string, idScope?: string): SVGElement {
     if (!ALLOWED_ELEMENTS.has(elementName)) {
       element.remove()
       return
-    }
-
-    if (elementName === 'style') {
-      element.textContent = sanitizeStyleSheet(element.textContent ?? '')
     }
 
     for (const attribute of Array.from(element.attributes)) {
@@ -192,6 +214,7 @@ export function sanitizeSvg(svg: string, idScope?: string): SVGElement {
   if (idScope) {
     scopeSvgIds(normalizedSvg, idScope)
   }
+  scopeStyleElementsToRoot(normalizedSvg, idScope)
   normalizeSvgLayout(normalizedSvg)
   return normalizedSvg
 }
@@ -199,6 +222,7 @@ export function sanitizeSvg(svg: string, idScope?: string): SVGElement {
 export function cloneSanitizedSvgWithIdScope(svgElement: SVGElement, idScope: string): SVGElement {
   const clone = svgElement.cloneNode(true) as SVGElement
   scopeSvgIds(clone, idScope)
+  scopeStyleElementsToRoot(clone, idScope)
   return clone
 }
 
@@ -230,24 +254,53 @@ function hasSafeAttributeValue(value: string): boolean {
   return hasOnlySafeCssUrls(value)
 }
 
-function sanitizeStyleSheet(styleSheet: string): string {
+function sanitizeStyleSheet(styleSheet: string, rootSelector: string): string {
   const rules = []
-  const styleSheetWithoutImports = styleSheet.replace(/@import[^;]+;/gi, '')
+  const styleSheetWithoutImports = stripCssAtRules(styleSheet.replace(/@import[^;]+;/gi, ''))
   const rulePattern = /([^{}]+)\{([^{}]*)\}/g
   let match: RegExpExecArray | null
   while ((match = rulePattern.exec(styleSheetWithoutImports)) !== null) {
     const selector = match[1]?.trim()
     const declarations = sanitizeStyleDeclarations(match[2] ?? '')
-    if (selector && declarations && isSafeCssSelector(selector)) {
-      rules.push(`${selector} { ${declarations} }`)
+    const scopedSelector = selector ? scopeCssSelector(selector, rootSelector) : null
+    if (scopedSelector && declarations) {
+      rules.push(`${scopedSelector} { ${declarations} }`)
     }
   }
 
   return rules.join('\n')
 }
 
-function isSafeCssSelector(selector: string): boolean {
-  return !selector.includes('@') && /^[a-zA-Z0-9\s.#:[\],>+~*="'()_-]+$/.test(selector)
+function stripCssAtRules(styleSheet: string): string {
+  return styleSheet.replace(/@[\w-]+\s+[^{]*\{(?:[^{}]|\{[^{}]*\})*\}/g, '')
+}
+
+function scopeCssSelector(selector: string, rootSelector: string): string | null {
+  if (selector.includes('@')) {
+    return null
+  }
+
+  const scopedSelectors = selector
+    .split(CSS_SELECTOR_SEPARATOR_PATTERN)
+    .map(part => part.trim())
+    .filter(Boolean)
+    .map(part => scopeSingleCssSelector(part, rootSelector))
+    .filter((part): part is string => Boolean(part))
+
+  return scopedSelectors.length > 0 ? scopedSelectors.join(', ') : null
+}
+
+function scopeSingleCssSelector(selector: string, rootSelector: string): string | null {
+  if (!/^[a-zA-Z0-9\s.#:[\],>+~*="'()_-]+$/.test(selector)) {
+    return null
+  }
+  if (selector === ':root') {
+    return rootSelector
+  }
+  if (selector.startsWith(rootSelector)) {
+    return selector
+  }
+  return `${rootSelector} ${selector}`
 }
 
 function sanitizeStyleDeclarations(style: string): string {
@@ -333,6 +386,7 @@ function rewriteSvgIdReferences(value: string, scopedIds: Map<string, string>): 
   scopedIds.forEach((scopedId, id) => {
     const escapedId = escapeRegExp(id)
     rewrittenValue = rewrittenValue.replace(new RegExp(`url\\(\\s*(["']?)#${escapedId}\\1\\s*\\)`, 'g'), `url(#${scopedId})`)
+    rewrittenValue = rewrittenValue.replace(new RegExp(`#${escapedId}(?![a-zA-Z0-9_-])`, 'g'), `#${scopedId}`)
     if (rewrittenValue === `#${id}`) {
       rewrittenValue = `#${scopedId}`
     }
@@ -352,6 +406,46 @@ function normalizeSvgLayout(svgElement: SVGElement): void {
   svgElement.removeAttribute('height')
   svgElement.setAttribute('preserveAspectRatio', 'xMidYMid meet')
   svgElement.setAttribute('focusable', 'false')
+}
+
+let nextGeneratedSvgScopeId = 0
+
+function scopeStyleElementsToRoot(svgElement: SVGElement, idScope?: string): void {
+  const styleElements = Array.from(svgElement.querySelectorAll('style'))
+  if (styleElements.length === 0) {
+    return
+  }
+
+  const rootSelector = `#${ensureRootSvgId(svgElement, idScope)}`
+  styleElements.forEach(element => {
+    const sanitizedStyleSheet = sanitizeStyleSheet(element.textContent ?? '', rootSelector)
+    if (sanitizedStyleSheet) {
+      element.textContent = sanitizedStyleSheet
+    } else {
+      element.remove()
+    }
+  })
+}
+
+function ensureRootSvgId(svgElement: SVGElement, idScope?: string): string {
+  const existingId = svgElement.getAttribute('id')
+  if (existingId) {
+    return existingId
+  }
+
+  const nextId = idScope ? sanitizeId(idScope) : createGeneratedSvgScopeId()
+  svgElement.setAttribute('id', nextId)
+  return nextId
+}
+
+function createGeneratedSvgScopeId(): string {
+  nextGeneratedSvgScopeId += 1
+  return `pumler-svg-scope-${nextGeneratedSvgScopeId}`
+}
+
+function sanitizeId(value: string): string {
+  const sanitized = value.replace(/[^a-zA-Z0-9_-]/g, '-')
+  return sanitized || createGeneratedSvgScopeId()
 }
 
 function ensureViewBox(svgElement: SVGElement): void {

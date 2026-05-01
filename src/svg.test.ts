@@ -30,14 +30,14 @@ describe('sanitizeSvg', () => {
         <use href="https://example.com/sprite.svg#x" />
         <rect class="safe" style="fill: url(#safe); background-image: url(https://example.com/bad.png)" />
       </svg>
-    `)
+    `, 'diagram')
 
     expect(svg.querySelector('image')).toBeNull()
     expect(svg.querySelector('use')?.getAttribute('href')).toBeNull()
     expect(svg.querySelector('style')?.textContent).not.toContain('@import')
-    expect(svg.querySelector('style')?.textContent).toContain('.safe { fill: url(#safe); stroke: #fff }')
+    expect(svg.querySelector('style')?.textContent).toContain('#diagram .safe { fill: url(#diagram-safe); stroke: #fff }')
     expect(svg.querySelector('style')?.textContent).not.toContain('https://example.com')
-    expect(svg.querySelector('rect')?.getAttribute('style')).toBe('fill: url(#safe)')
+    expect(svg.querySelector('rect')?.getAttribute('style')).toBe('fill: url(#diagram-safe)')
   })
 
   test('normalizes percent dimensions to width-only responsive SVG', () => {
@@ -76,7 +76,55 @@ describe('sanitizeSvg', () => {
     expect(svg.querySelector('rect.actor')?.getAttribute('fill')).toBe('url(#diagram-1-actor-bg)')
     expect(svg.querySelector('rect.actor')?.getAttribute('clip-path')).toBe('url(#diagram-1-clip)')
     expect(svg.querySelector('use')?.getAttribute('href')).toBe('#diagram-1-clip')
-    expect(svg.querySelector('style')?.textContent).toContain('url(#diagram-1-actor-bg)')
+    expect(svg.querySelector('style')?.textContent).toContain('#diagram-1 .actor { fill: url(#diagram-1-actor-bg) }')
+  })
+
+  test('keeps stylesheet rules scoped to the root SVG id', () => {
+    const svg = sanitizeSvg(`
+      <svg id="container" viewBox="0 0 10 10">
+        <style>
+          #container { fill: #111; }
+          .node rect, text.label { stroke: #222; }
+          p { margin: 0; }
+          @keyframes dash { to { stroke-dashoffset: 0; } }
+          body { color: red; }
+        </style>
+        <g class="node"><rect /></g>
+        <text class="label">A</text>
+      </svg>
+    `, 'diagram')
+
+    const style = svg.querySelector('style')?.textContent
+    expect(svg.getAttribute('id')).toBe('diagram-container')
+    expect(style).toContain('#diagram-container { fill: #111 }')
+    expect(style).toContain('#diagram-container .node rect, #diagram-container text.label { stroke: #222 }')
+    expect(style).toContain('#diagram-container p { margin: 0 }')
+    expect(style).toContain('#diagram-container body { color: red }')
+    expect(style).not.toContain('keyframes')
+    expect(style).not.toContain('to { stroke-dashoffset')
+  })
+
+  test('preserves sanitized Mermaid foreignObject labels', () => {
+    const svg = sanitizeSvg(`
+      <svg id="container" viewBox="0 0 204 70">
+        <g class="node default">
+          <foreignObject width="9.171875" height="24">
+            <div xmlns="http://www.w3.org/1999/xhtml" onclick="bad()" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center; background-image: url(https://example.com/bad.png);">
+              <span class="nodeLabel"><p>A</p></span>
+            </div>
+          </foreignObject>
+        </g>
+      </svg>
+    `, 'diagram')
+
+    const foreignObject = Array.from(svg.querySelectorAll('*')).find(element => element.localName === 'foreignObject')
+    const label = svg.querySelector('.nodeLabel')
+    const labelContainer = svg.querySelector('div')
+
+    expect(foreignObject).not.toBeNull()
+    expect(label?.textContent).toBe('A')
+    expect(labelContainer?.getAttribute('onclick')).toBeNull()
+    expect(labelContainer?.getAttribute('style')).toBe('display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center')
   })
 
   test('rejects invalid SVG', () => {

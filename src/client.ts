@@ -1,5 +1,4 @@
 import { PUMLER_API_URL, type Provider, type ResolvedTheme } from './constants'
-import { formatLogError, NOOP_PUMLER_LOGGER, type PumlerLogger } from './logger'
 
 export interface RenderDiagramOptions {
   provider: Provider
@@ -33,19 +32,8 @@ export class PumlerRenderError extends Error {
 }
 
 export class PumlerApiClient {
-  constructor(private readonly logger: PumlerLogger = NOOP_PUMLER_LOGGER) {}
-
   async renderDiagram(options: RenderDiagramOptions, requestOptions: RenderDiagramRequestOptions = {}): Promise<string> {
     let response: Response
-    const startedAt = Date.now()
-    this.logger.info('client.render.start', {
-      provider: options.provider,
-      type: options.type,
-      theme: options.theme,
-      sourceLength: options.source.length,
-      signalAborted: requestOptions.signal?.aborted ?? false
-    })
-
     try {
       response = await fetch(PUMLER_API_URL, {
         method: 'POST',
@@ -66,13 +54,6 @@ export class PumlerApiClient {
         signal: requestOptions.signal
       })
     } catch (error) {
-      this.logger.warn('client.render.network_error', {
-        provider: options.provider,
-        type: options.type,
-        durationMs: Date.now() - startedAt,
-        signalAborted: requestOptions.signal?.aborted ?? false,
-        ...formatLogError(error)
-      })
       if (requestOptions.signal?.aborted) {
         throw error
       }
@@ -81,33 +62,13 @@ export class PumlerApiClient {
 
     const data = await readJson(response)
     if (!response.ok) {
-      this.logger.warn('client.render.api_error', {
-        provider: options.provider,
-        type: options.type,
-        durationMs: Date.now() - startedAt,
-        status: response.status
-      })
       throw mapApiError(data)
     }
 
     const diagram = data && typeof data === 'object' && 'diagram' in data ? data.diagram : undefined
     if (typeof diagram !== 'string' || diagram.trim() === '') {
-      this.logger.warn('client.render.unexpected_response', {
-        provider: options.provider,
-        type: options.type,
-        durationMs: Date.now() - startedAt,
-        status: response.status
-      })
       throw new PumlerRenderError('Unexpected response from the Pumler rendering API')
     }
-
-    this.logger.info('client.render.success', {
-      provider: options.provider,
-      type: options.type,
-      durationMs: Date.now() - startedAt,
-      status: response.status,
-      svgLength: diagram.length
-    })
 
     return diagram
   }

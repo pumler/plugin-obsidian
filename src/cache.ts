@@ -1,6 +1,5 @@
 import type { DataAdapter } from 'obsidian'
 import { createRenderDiagramCacheSeed, type RenderDiagramOptions } from './client'
-import { createLogDigest, formatLogError, NOOP_PUMLER_LOGGER, type PumlerLogger } from './logger'
 
 export const SVG_DISK_CACHE_LIMIT = 30
 
@@ -29,59 +28,22 @@ export class PumlerDiskSvgCache implements PumlerSvgCache {
   constructor(
     private readonly adapter: DataAdapter,
     private readonly cacheDir: string,
-    private readonly limit = SVG_DISK_CACHE_LIMIT,
-    private readonly logger: PumlerLogger = NOOP_PUMLER_LOGGER
+    private readonly limit = SVG_DISK_CACHE_LIMIT
   ) {
     this.cacheDir = normalizeVaultPath(cacheDir)
     this.indexPath = normalizeVaultPath(`${this.cacheDir}/index.json`)
   }
 
   async get(options: RenderDiagramOptions): Promise<string | null> {
-    const startedAt = Date.now()
-    const cacheSeedDigest = createLogDigest(createRenderDiagramCacheSeed(options))
-    this.logger.debug('cache.get.start', createCacheLogData(options, cacheSeedDigest))
-
     try {
-      const svg = await this.enqueueOperation(() => this.readEntry(options, cacheSeedDigest))
-      this.logger.debug(svg ? 'cache.get.hit' : 'cache.get.miss', {
-        ...createCacheLogData(options, cacheSeedDigest),
-        durationMs: Date.now() - startedAt,
-        svgLength: svg?.length
-      })
-      return svg
+      return await this.enqueueOperation(() => this.readEntry(options))
     } catch (error) {
-      this.logger.warn('cache.get.error', {
-        ...createCacheLogData(options, cacheSeedDigest),
-        durationMs: Date.now() - startedAt,
-        ...formatLogError(error)
-      })
       return null
     }
   }
 
   async set(options: RenderDiagramOptions, svg: string): Promise<void> {
-    const startedAt = Date.now()
-    const cacheSeedDigest = createLogDigest(createRenderDiagramCacheSeed(options))
-    this.logger.debug('cache.set.start', {
-      ...createCacheLogData(options, cacheSeedDigest),
-      svgLength: svg.length
-    })
-
-    await this.enqueueOperation(() => this.writeEntry(options, svg, cacheSeedDigest))
-      .then(() => {
-        this.logger.debug('cache.set.done', {
-          ...createCacheLogData(options, cacheSeedDigest),
-          durationMs: Date.now() - startedAt,
-          svgLength: svg.length
-        })
-      })
-      .catch(error => {
-        this.logger.warn('cache.set.error', {
-          ...createCacheLogData(options, cacheSeedDigest),
-          durationMs: Date.now() - startedAt,
-          ...formatLogError(error)
-        })
-      })
+    await this.enqueueOperation(() => this.writeEntry(options, svg)).catch(() => undefined)
   }
 
   private enqueueOperation<T>(operation: () => Promise<T>): Promise<T> {
@@ -96,7 +58,7 @@ export class PumlerDiskSvgCache implements PumlerSvgCache {
     return result
   }
 
-  private async readEntry(options: RenderDiagramOptions, cacheSeedDigest: string): Promise<string | null> {
+  private async readEntry(options: RenderDiagramOptions): Promise<string | null> {
     const key = await createCacheKey(options)
     const index = await this.readIndex()
     const entry = index.entries.find(candidate => candidate.key === key)
@@ -110,15 +72,10 @@ export class PumlerDiskSvgCache implements PumlerSvgCache {
     entry.lastAccessed = now
     entry.updatedAt = Math.max(entry.updatedAt, entry.createdAt)
     await this.writeIndex(index)
-    this.logger.debug('cache.index.touch', {
-      ...createCacheLogData(options, cacheSeedDigest),
-      file: entry.file,
-      entryCount: index.entries.length
-    })
     return svg
   }
 
-  private async writeEntry(options: RenderDiagramOptions, svg: string, cacheSeedDigest: string): Promise<void> {
+  private async writeEntry(options: RenderDiagramOptions, svg: string): Promise<void> {
     await this.ensureCacheDir()
 
     const key = await createCacheKey(options)
@@ -145,11 +102,6 @@ export class PumlerDiskSvgCache implements PumlerSvgCache {
 
     await this.prune(index)
     await this.writeIndex(index)
-    this.logger.debug('cache.index.write', {
-      ...createCacheLogData(options, cacheSeedDigest),
-      file,
-      entryCount: index.entries.length
-    })
   }
 
   private async readIndex(): Promise<CacheIndex> {
@@ -191,13 +143,6 @@ export class PumlerDiskSvgCache implements PumlerSvgCache {
     index.entries = retainedEntries
 
     await Promise.all(removedEntries.map(entry => this.removeCacheFile(entry.file)))
-    if (removedEntries.length > 0) {
-      this.logger.info('cache.prune', {
-        removedCount: removedEntries.length,
-        retainedCount: retainedEntries.length,
-        limit: this.limit
-      })
-    }
   }
 
   private async removeCacheFile(file: string): Promise<void> {
@@ -206,16 +151,6 @@ export class PumlerDiskSvgCache implements PumlerSvgCache {
     } catch {
       // Cache pruning must not break rendering.
     }
-  }
-}
-
-function createCacheLogData(options: RenderDiagramOptions, cacheSeedDigest: string): Record<string, unknown> {
-  return {
-    provider: options.provider,
-    type: options.type,
-    theme: options.theme,
-    sourceLength: options.source.length,
-    cacheSeedDigest
   }
 }
 
