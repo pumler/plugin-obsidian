@@ -1,20 +1,22 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { PumlerApiClient, PumlerRenderError } from './client'
+import type { RequestUrlResponse } from 'obsidian'
+import { PumlerApiClient, type PumlerRequestUrl } from './client'
 
 describe('PumlerApiClient', () => {
+  let requestUrlMock: ReturnType<typeof vi.fn<PumlerRequestUrl>>
+
   beforeEach(() => {
-    vi.stubGlobal('fetch', vi.fn())
+    requestUrlMock = vi.fn<PumlerRequestUrl>()
   })
 
   afterEach(() => {
-    vi.unstubAllGlobals()
+    vi.clearAllMocks()
   })
 
   test('renders a diagram through the Pumler API', async () => {
-    const fetchMock = vi.mocked(fetch)
-    fetchMock.mockResolvedValue(createResponse(200, { diagram: '<svg></svg>' }))
+    requestUrlMock.mockResolvedValue(createResponse(200, { diagram: '<svg></svg>' }))
 
-    const client = new PumlerApiClient()
+    const client = new PumlerApiClient(requestUrlMock)
     const result = await client.renderDiagram({
       provider: 'plantuml',
       type: 'sequence',
@@ -23,8 +25,11 @@ describe('PumlerApiClient', () => {
     })
 
     expect(result).toBe('<svg></svg>')
-    expect(fetchMock).toHaveBeenCalledWith('https://api.pumler.com/api/diagram/render', expect.objectContaining({
+    expect(requestUrlMock).toHaveBeenCalledWith(expect.objectContaining({
+      url: 'https://api.pumler.com/api/diagram/render',
       method: 'POST',
+      contentType: 'application/json',
+      throw: false,
       body: JSON.stringify({
         source: 'Alice -> Bob',
         metadata: {
@@ -39,7 +44,7 @@ describe('PumlerApiClient', () => {
   })
 
   test('maps structured API errors', async () => {
-    vi.mocked(fetch).mockResolvedValue(createResponse(400, {
+    requestUrlMock.mockResolvedValue(createResponse(400, {
       error: {
         message: 'Syntax error',
         line: 2,
@@ -47,7 +52,7 @@ describe('PumlerApiClient', () => {
       }
     }))
 
-    const client = new PumlerApiClient()
+    const client = new PumlerApiClient(requestUrlMock)
     await expect(client.renderDiagram({
       provider: 'plantuml',
       type: 'sequence',
@@ -62,9 +67,9 @@ describe('PumlerApiClient', () => {
   })
 
   test('maps network failures', async () => {
-    vi.mocked(fetch).mockRejectedValue(new Error('offline'))
+    requestUrlMock.mockRejectedValue(new Error('offline'))
 
-    const client = new PumlerApiClient()
+    const client = new PumlerApiClient(requestUrlMock)
     await expect(client.renderDiagram({
       provider: 'mermaid',
       type: 'flowchart',
@@ -74,10 +79,9 @@ describe('PumlerApiClient', () => {
   })
 
   test('does not cache repeated render requests by itself', async () => {
-    const fetchMock = vi.mocked(fetch)
-    fetchMock.mockResolvedValue(createResponse(200, { diagram: '<svg></svg>' }))
+    requestUrlMock.mockResolvedValue(createResponse(200, { diagram: '<svg></svg>' }))
 
-    const client = new PumlerApiClient()
+    const client = new PumlerApiClient(requestUrlMock)
     const options = {
       provider: 'mermaid' as const,
       type: 'flowchart',
@@ -88,14 +92,16 @@ describe('PumlerApiClient', () => {
     await client.renderDiagram(options)
     await client.renderDiagram(options)
 
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(requestUrlMock).toHaveBeenCalledTimes(2)
   })
 })
 
-function createResponse(status: number, data: unknown): Response {
+function createResponse(status: number, data: unknown): RequestUrlResponse {
   return {
-    ok: status >= 200 && status < 300,
     status,
-    json: async () => data
-  } as Response
+    headers: {},
+    arrayBuffer: new ArrayBuffer(0),
+    json: data,
+    text: JSON.stringify(data)
+  }
 }

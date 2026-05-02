@@ -22,7 +22,7 @@ describe('PumlerBlockRenderer', () => {
   })
 
   test('renders sanitized SVG on success', async () => {
-    const renderer = new PumlerBlockRenderer(createClient(async () => '<svg onclick="bad()"><script>bad()</script><circle /></svg>'))
+    const renderer = new PumlerBlockRenderer(createClient(() => Promise.resolve('<svg onclick="bad()"><script>bad()</script><circle /></svg>')))
     const element = document.createElement('div')
 
     await renderImmediately(renderer, validBlock(), element)
@@ -38,7 +38,7 @@ describe('PumlerBlockRenderer', () => {
   })
 
   test('open preview action does not toggle the summary panel', async () => {
-    const renderer = new PumlerBlockRenderer(createClient(async () => '<svg viewBox="0 0 10 10"><circle /></svg>'))
+    const renderer = new PumlerBlockRenderer(createClient(() => Promise.resolve('<svg viewBox="0 0 10 10"><circle /></svg>')))
     const element = document.createElement('div')
 
     await renderImmediately(renderer, validBlock(), element)
@@ -52,7 +52,7 @@ describe('PumlerBlockRenderer', () => {
   })
 
   test('collapses and expands the diagram summary with title', async () => {
-    const renderer = new PumlerBlockRenderer(createClient(async () => '<svg viewBox="0 0 10 10"><circle /></svg>'))
+    const renderer = new PumlerBlockRenderer(createClient(() => Promise.resolve('<svg viewBox="0 0 10 10"><circle /></svg>')))
     const element = document.createElement('div')
 
     await renderImmediately(renderer, validBlockWithTitle(), element)
@@ -77,7 +77,7 @@ describe('PumlerBlockRenderer', () => {
   })
 
   test('opens and closes a large preview', async () => {
-    const renderer = new PumlerBlockRenderer(createClient(async () => '<svg viewBox="0 0 10 10"><circle /></svg>'))
+    const renderer = new PumlerBlockRenderer(createClient(() => Promise.resolve('<svg viewBox="0 0 10 10"><circle /></svg>')))
     const element = document.createElement('div')
 
     await renderImmediately(renderer, validBlock(), element)
@@ -104,7 +104,7 @@ describe('PumlerBlockRenderer', () => {
   })
 
   test('registers modal cleanup for render child unload', async () => {
-    const renderer = new PumlerBlockRenderer(createClient(async () => '<svg viewBox="0 0 10 10"><circle /></svg>'))
+    const renderer = new PumlerBlockRenderer(createClient(() => Promise.resolve('<svg viewBox="0 0 10 10"><circle /></svg>')))
     const element = document.createElement('div')
     const cleanups: Array<() => void> = []
 
@@ -122,7 +122,7 @@ describe('PumlerBlockRenderer', () => {
   })
 
   test('button zoom keeps the diagram center as focal point', async () => {
-    const renderer = new PumlerBlockRenderer(createClient(async () => '<svg viewBox="0 0 10 10"><circle /></svg>'))
+    const renderer = new PumlerBlockRenderer(createClient(() => Promise.resolve('<svg viewBox="0 0 10 10"><circle /></svg>')))
     const element = document.createElement('div')
 
     await renderImmediately(renderer, validBlock(), element)
@@ -142,7 +142,7 @@ describe('PumlerBlockRenderer', () => {
   })
 
   test('zooms the large preview with modified wheel events', async () => {
-    const renderer = new PumlerBlockRenderer(createClient(async () => '<svg viewBox="0 0 10 10"><circle /></svg>'))
+    const renderer = new PumlerBlockRenderer(createClient(() => Promise.resolve('<svg viewBox="0 0 10 10"><circle /></svg>')))
     const element = document.createElement('div')
 
     await renderImmediately(renderer, validBlock(), element)
@@ -173,7 +173,7 @@ describe('PumlerBlockRenderer', () => {
   })
 
   test('wheel zoom keeps the cursor position as focal point', async () => {
-    const renderer = new PumlerBlockRenderer(createClient(async () => '<svg viewBox="0 0 10 10"><circle /></svg>'))
+    const renderer = new PumlerBlockRenderer(createClient(() => Promise.resolve('<svg viewBox="0 0 10 10"><circle /></svg>')))
     const element = document.createElement('div')
 
     await renderImmediately(renderer, validBlock(), element)
@@ -204,7 +204,7 @@ describe('PumlerBlockRenderer', () => {
   })
 
   test('renders validation errors', async () => {
-    const renderer = new PumlerBlockRenderer(createClient(async () => '<svg></svg>'))
+    const renderer = new PumlerBlockRenderer(createClient(() => Promise.resolve('<svg></svg>')))
     const element = document.createElement('div')
 
     await renderImmediately(renderer, 'Alice -> Bob', element)
@@ -214,9 +214,7 @@ describe('PumlerBlockRenderer', () => {
   })
 
   test('renders API errors with source location', async () => {
-    const renderer = new PumlerBlockRenderer(createClient(async () => {
-      throw new PumlerRenderError('Syntax error', 3, 7)
-    }))
+    const renderer = new PumlerBlockRenderer(createClient(() => Promise.reject(new PumlerRenderError('Syntax error', 3, 7))))
     const element = document.createElement('div')
 
     await renderImmediately(renderer, validBlock(), element)
@@ -228,10 +226,12 @@ describe('PumlerBlockRenderer', () => {
 
   test('renders cached SVGs immediately without waiting for debounce', async () => {
     vi.useFakeTimers()
-    const renderDiagram = vi.fn(async () => '<svg viewBox="0 0 10 10"><circle /></svg>')
+    const renderDiagram = vi.fn(() => Promise.resolve('<svg viewBox="0 0 10 10"><circle /></svg>'))
+    const cacheGet = vi.fn(() => Promise.resolve('<svg viewBox="0 0 20 20"><rect /></svg>'))
+    const cacheSet = vi.fn(() => Promise.resolve())
     const cache: PumlerSvgCache = {
-      get: vi.fn(async () => '<svg viewBox="0 0 20 20"><rect /></svg>'),
-      set: vi.fn(async () => undefined)
+      get: cacheGet,
+      set: cacheSet
     }
     const renderer = new PumlerBlockRenderer(createClient(renderDiagram), cache)
     const element = document.createElement('div')
@@ -242,13 +242,13 @@ describe('PumlerBlockRenderer', () => {
     })
 
     expect(renderDiagram).not.toHaveBeenCalled()
-    expect(cache.get).toHaveBeenCalledWith(expect.objectContaining({
+    expect(cacheGet).toHaveBeenCalledWith(expect.objectContaining({
       provider: 'plantuml',
       type: 'sequence',
       theme: 'light',
       source: 'Alice -> Bob'
     }))
-    expect(cache.set).not.toHaveBeenCalled()
+    expect(cacheSet).not.toHaveBeenCalled()
     expect(element.querySelector('rect')).not.toBeNull()
   })
 
@@ -261,11 +261,13 @@ describe('PumlerBlockRenderer', () => {
         <rect fill="url(#grad)" width="20" height="20" onclick="bad()" />
       </svg>
     `
+    const cacheGet = vi.fn(() => Promise.resolve(cachedSvg))
+    const cacheSet = vi.fn(() => Promise.resolve())
     const cache: PumlerSvgCache = {
-      get: vi.fn(async () => cachedSvg),
-      set: vi.fn(async () => undefined)
+      get: cacheGet,
+      set: cacheSet
     }
-    const renderer = new PumlerBlockRenderer(createClient(async () => '<svg></svg>'), cache)
+    const renderer = new PumlerBlockRenderer(createClient(() => Promise.resolve('<svg></svg>')), cache)
     const firstElement = document.createElement('div')
     const secondElement = document.createElement('div')
 
@@ -284,10 +286,10 @@ describe('PumlerBlockRenderer', () => {
   })
 
   test('does not skip cached renders for detached Obsidian processor elements', async () => {
-    const renderDiagram = vi.fn(async () => '<svg viewBox="0 0 10 10"><circle /></svg>')
+    const renderDiagram = vi.fn(() => Promise.resolve('<svg viewBox="0 0 10 10"><circle /></svg>'))
     const cache: PumlerSvgCache = {
-      get: vi.fn(async () => '<svg viewBox="0 0 20 20"><rect /></svg>'),
-      set: vi.fn(async () => undefined)
+      get: vi.fn(() => Promise.resolve('<svg viewBox="0 0 20 20"><rect /></svg>')),
+      set: vi.fn(() => Promise.resolve())
     }
     const renderer = new PumlerBlockRenderer(createClient(renderDiagram), cache)
     const element = document.createElement('div')
@@ -303,7 +305,7 @@ describe('PumlerBlockRenderer', () => {
 
   test('debounces repeated render requests for the same block', async () => {
     vi.useFakeTimers()
-    const renderDiagram = vi.fn(async () => '<svg viewBox="0 0 10 10"><circle /></svg>')
+    const renderDiagram = vi.fn(() => Promise.resolve('<svg viewBox="0 0 10 10"><circle /></svg>'))
     const renderer = new PumlerBlockRenderer(createClient(renderDiagram))
     const element = document.createElement('div')
 
@@ -333,7 +335,7 @@ describe('PumlerBlockRenderer', () => {
 
   test('keeps a pending debounced render alive when its view aborts', async () => {
     vi.useFakeTimers()
-    const renderDiagram = vi.fn(async () => '<svg viewBox="0 0 10 10"><circle /></svg>')
+    const renderDiagram = vi.fn(() => Promise.resolve('<svg viewBox="0 0 10 10"><circle /></svg>'))
     const renderer = new PumlerBlockRenderer(createClient(renderDiagram))
     const element = document.createElement('div')
     const abortController = new AbortController()

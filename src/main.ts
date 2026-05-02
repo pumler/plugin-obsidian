@@ -1,15 +1,16 @@
-import { MarkdownRenderChild, Plugin, type App, type MarkdownPostProcessorContext } from 'obsidian'
+import { MarkdownRenderChild, Plugin, requestUrl, type App, type MarkdownPostProcessorContext } from 'obsidian'
 import { PumlerDiskSvgCache } from './cache'
 import { PumlerApiClient } from './client'
 import { parsePumlerBlock } from './parser'
 import { PumlerBlockRenderer } from './renderer'
 
 export default class PumlerPlugin extends Plugin {
-  async onload(): Promise<void> {
-    const cache = this.manifest.dir
-      ? new PumlerDiskSvgCache(this.app.vault.adapter, `${this.manifest.dir}/cache`)
-      : undefined
-    const renderer = new PumlerBlockRenderer(new PumlerApiClient(), cache)
+  onload(): void {
+    const cache = new PumlerDiskSvgCache(
+      this.app.vault.adapter,
+      `${this.app.vault.configDir}/plugins/${this.manifest.id}/cache`
+    )
+    const renderer = new PumlerBlockRenderer(new PumlerApiClient(requestUrl), cache)
 
     this.registerMarkdownCodeBlockProcessor('pumler', (source, element, context) => {
       const debounceKey = createDebounceKey(source, element, context)

@@ -3,10 +3,12 @@ import type { DataAdapter, ListedFiles, Stat } from 'obsidian'
 import { PumlerDiskSvgCache } from './cache'
 import type { RenderDiagramOptions } from './client'
 
+const CACHE_DIR = 'custom-config/plugins/pumler/cache'
+
 describe('PumlerDiskSvgCache', () => {
   test('stores and reads SVGs by render options', async () => {
     const adapter = new MemoryAdapter()
-    const cache = new PumlerDiskSvgCache(adapter, '.obsidian/plugins/pumler/cache', 30)
+    const cache = new PumlerDiskSvgCache(adapter, CACHE_DIR, 30)
     const options = renderOptions('Alice -> Bob')
 
     await cache.set(options, '<svg>Alice</svg>')
@@ -17,7 +19,7 @@ describe('PumlerDiskSvgCache', () => {
 
   test('keeps only the most recently used entries', async () => {
     const adapter = new MemoryAdapter()
-    const cache = new PumlerDiskSvgCache(adapter, '.obsidian/plugins/pumler/cache', 2)
+    const cache = new PumlerDiskSvgCache(adapter, CACHE_DIR, 2)
     const first = renderOptions('A -> B')
     const second = renderOptions('B -> C')
     const third = renderOptions('C -> D')
@@ -35,10 +37,10 @@ describe('PumlerDiskSvgCache', () => {
 
   test('ignores corrupt cache indexes', async () => {
     const adapter = new MemoryAdapter()
-    await adapter.mkdir('.obsidian/plugins/pumler/cache')
-    await adapter.write('.obsidian/plugins/pumler/cache/index.json', 'not json')
+    await adapter.mkdir(CACHE_DIR)
+    await adapter.write(`${CACHE_DIR}/index.json`, 'not json')
 
-    const cache = new PumlerDiskSvgCache(adapter, '.obsidian/plugins/pumler/cache', 30)
+    const cache = new PumlerDiskSvgCache(adapter, CACHE_DIR, 30)
     const options = renderOptions('A -> B')
 
     await cache.set(options, '<svg>fresh</svg>')
@@ -64,113 +66,124 @@ class MemoryAdapter implements DataAdapter {
     return 'memory'
   }
 
-  async exists(normalizedPath: string): Promise<boolean> {
-    return this.folders.has(normalizedPath) || this.files.has(normalizedPath)
+  exists(normalizedPath: string): Promise<boolean> {
+    return Promise.resolve(this.hasPath(normalizedPath))
   }
 
-  async stat(normalizedPath: string): Promise<Stat | null> {
-    if (!await this.exists(normalizedPath)) {
-      return null
+  stat(normalizedPath: string): Promise<Stat | null> {
+    if (!this.hasPath(normalizedPath)) {
+      return Promise.resolve(null)
     }
 
-    return {
+    return Promise.resolve({
       type: this.folders.has(normalizedPath) ? 'folder' : 'file',
       ctime: 0,
       mtime: 0,
       size: this.files.get(normalizedPath)?.length ?? 0
-    }
+    })
   }
 
-  async list(normalizedPath: string): Promise<ListedFiles> {
+  list(normalizedPath: string): Promise<ListedFiles> {
     const prefix = `${normalizedPath}/`
-    return {
+    return Promise.resolve({
       files: Array.from(this.files.keys()).filter(path => path.startsWith(prefix)),
       folders: Array.from(this.folders).filter(path => path.startsWith(prefix))
-    }
+    })
   }
 
-  async read(normalizedPath: string): Promise<string> {
+  read(normalizedPath: string): Promise<string> {
     const data = this.files.get(normalizedPath)
     if (data === undefined) {
-      throw new Error(`Missing file: ${normalizedPath}`)
+      return Promise.reject(new Error(`Missing file: ${normalizedPath}`))
     }
 
-    return data
+    return Promise.resolve(data)
   }
 
-  async readBinary(): Promise<ArrayBuffer> {
-    throw new Error('Not implemented')
+  readBinary(): Promise<ArrayBuffer> {
+    return Promise.reject(new Error('Not implemented'))
   }
 
-  async write(normalizedPath: string, data: string): Promise<void> {
+  write(normalizedPath: string, data: string): Promise<void> {
     this.files.set(normalizedPath, data)
+    return Promise.resolve()
   }
 
-  async writeBinary(): Promise<void> {
-    throw new Error('Not implemented')
+  writeBinary(): Promise<void> {
+    return Promise.reject(new Error('Not implemented'))
   }
 
-  async append(normalizedPath: string, data: string): Promise<void> {
+  append(normalizedPath: string, data: string): Promise<void> {
     this.files.set(normalizedPath, `${this.files.get(normalizedPath) ?? ''}${data}`)
+    return Promise.resolve()
   }
 
-  async appendBinary(): Promise<void> {
-    throw new Error('Not implemented')
+  appendBinary(): Promise<void> {
+    return Promise.reject(new Error('Not implemented'))
   }
 
-  async process(normalizedPath: string, fn: (data: string) => string): Promise<string> {
+  process(normalizedPath: string, fn: (data: string) => string): Promise<string> {
     const data = fn(this.files.get(normalizedPath) ?? '')
     this.files.set(normalizedPath, data)
-    return data
+    return Promise.resolve(data)
   }
 
   getResourcePath(normalizedPath: string): string {
     return normalizedPath
   }
 
-  async mkdir(normalizedPath: string): Promise<void> {
+  mkdir(normalizedPath: string): Promise<void> {
     this.folders.add(normalizedPath)
+    return Promise.resolve()
   }
 
-  async trashSystem(): Promise<boolean> {
-    return false
+  trashSystem(): Promise<boolean> {
+    return Promise.resolve(false)
   }
 
-  async trashLocal(): Promise<void> {
-    throw new Error('Not implemented')
+  trashLocal(): Promise<void> {
+    return Promise.reject(new Error('Not implemented'))
   }
 
-  async rmdir(normalizedPath: string): Promise<void> {
+  rmdir(normalizedPath: string): Promise<void> {
     this.folders.delete(normalizedPath)
+    return Promise.resolve()
   }
 
-  async remove(normalizedPath: string): Promise<void> {
+  remove(normalizedPath: string): Promise<void> {
     this.files.delete(normalizedPath)
+    return Promise.resolve()
   }
 
-  async rename(normalizedPath: string, normalizedNewPath: string): Promise<void> {
+  rename(normalizedPath: string, normalizedNewPath: string): Promise<void> {
     const data = this.files.get(normalizedPath)
     if (data !== undefined) {
       this.files.delete(normalizedPath)
       this.files.set(normalizedNewPath, data)
-      return
+      return Promise.resolve()
     }
 
     if (this.folders.delete(normalizedPath)) {
       this.folders.add(normalizedNewPath)
     }
+    return Promise.resolve()
   }
 
-  async copy(normalizedPath: string, normalizedNewPath: string): Promise<void> {
+  copy(normalizedPath: string, normalizedNewPath: string): Promise<void> {
     const data = this.files.get(normalizedPath)
     if (data === undefined) {
-      throw new Error(`Missing file: ${normalizedPath}`)
+      return Promise.reject(new Error(`Missing file: ${normalizedPath}`))
     }
 
     this.files.set(normalizedNewPath, data)
+    return Promise.resolve()
   }
 
   svgFileCount(): number {
     return Array.from(this.files.keys()).filter(path => path.endsWith('.svg')).length
+  }
+
+  private hasPath(normalizedPath: string): boolean {
+    return this.folders.has(normalizedPath) || this.files.has(normalizedPath)
   }
 }

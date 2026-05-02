@@ -60,7 +60,6 @@ jobs:
           test -s main.js
           test -s manifest.json
           test -s styles.css
-          test -s versions.json
 
       - name: Create GitHub release
         env:
@@ -70,6 +69,5 @@ jobs:
             main.js \
             manifest.json \
             styles.css \
-            versions.json \
             --title "$GITHUB_REF_NAME" \
             --notes "Release $GITHUB_REF_NAME"

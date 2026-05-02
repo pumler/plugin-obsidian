@@ -37,7 +37,7 @@ export class PumlerDiskSvgCache implements PumlerSvgCache {
   async get(options: RenderDiagramOptions): Promise<string | null> {
     try {
       return await this.enqueueOperation(() => this.readEntry(options))
-    } catch (error) {
+    } catch {
       return null
     }
   }

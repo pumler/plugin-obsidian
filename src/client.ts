@@ -1,3 +1,4 @@
+import type { RequestUrlParam, RequestUrlResponse } from 'obsidian'
 import { PUMLER_API_URL, type Provider, type ResolvedTheme } from './constants'
 
 export interface RenderDiagramOptions {
@@ -19,6 +20,10 @@ interface PumlerErrorPayload {
   }
 }
 
+export interface PumlerRequestUrl {
+  (request: RequestUrlParam): Promise<RequestUrlResponse>
+}
+
 export class PumlerRenderError extends Error {
   readonly line?: number
   readonly column?: number
@@ -32,15 +37,18 @@ export class PumlerRenderError extends Error {
 }
 
 export class PumlerApiClient {
+  constructor(private readonly requestUrl: PumlerRequestUrl) {}
+
   async renderDiagram(options: RenderDiagramOptions, requestOptions: RenderDiagramRequestOptions = {}): Promise<string> {
-    let response: Response
+    let response: RequestUrlResponse
     try {
-      response = await fetch(PUMLER_API_URL, {
+      response = await this.requestUrl({
+        url: PUMLER_API_URL,
         method: 'POST',
         headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json'
+          Accept: 'application/json'
         },
+        contentType: 'application/json',
         body: JSON.stringify({
           source: options.source,
           metadata: {
@@ -51,7 +59,7 @@ export class PumlerApiClient {
             }
           }
         }),
-        signal: requestOptions.signal
+        throw: false
       })
     } catch (error) {
       if (requestOptions.signal?.aborted) {
@@ -60,8 +68,8 @@ export class PumlerApiClient {
       throw new PumlerRenderError('Network error: unable to reach the Pumler rendering API')
     }
 
-    const data = await readJson(response)
-    if (!response.ok) {
+    const data = readJson(response)
+    if (response.status < 200 || response.status >= 300) {
       throw mapApiError(data)
     }
 
@@ -84,12 +92,10 @@ export function createRenderDiagramCacheSeed(options: RenderDiagramOptions): str
   ])
 }
 
-async function readJson(response: Response): Promise<Record<string, unknown> | null> {
-  try {
-    return await response.json()
-  } catch {
-    return null
-  }
+function readJson(response: RequestUrlResponse): Record<string, unknown> | null {
+  return response.json && typeof response.json === 'object'
+    ? response.json as Record<string, unknown>
+    : null
 }
 
 function mapApiError(payload: PumlerErrorPayload | Record<string, unknown> | null): PumlerRenderError {

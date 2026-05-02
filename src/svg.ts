@@ -1,5 +1,5 @@
 const SIZING_STYLE_PROPERTIES = ['width', 'height', 'max-width', 'max-height', 'min-width', 'min-height']
-const CSS_SELECTOR_SEPARATOR_PATTERN = /,(?![^\[]*\])/
+const CSS_SELECTOR_SEPARATOR_PATTERN = /,(?![^[]*])/
 
 const ALLOWED_ELEMENTS = new Set([
   'svg',
